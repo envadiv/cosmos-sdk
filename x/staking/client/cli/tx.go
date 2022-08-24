@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -42,6 +44,7 @@ func NewTxCmd() *cobra.Command {
 		NewCreateValidatorCmd(),
 		NewEditValidatorCmd(),
 		NewDelegateCmd(),
+		NewMultiDelegateCmd(),
 		NewRedelegateCmd(),
 		NewUnbondCmd(),
 	)
@@ -184,6 +187,101 @@ $ %s tx staking delegate %s1l2rsakp388kuv9k8qzq6lrm9taddae7fpx59wm 1000stake --f
 	flags.AddTxFlagsToCmd(cmd)
 
 	return cmd
+}
+
+func NewMultiDelegateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "multi-delegate [csv-file]",
+		Args:  cobra.ExactArgs(1),
+		Short: "Delegate liquid tokens to a multiple validators",
+		Long: strings.TrimSpace(
+			fmt.Sprintf(`Delegate an amount of liquid coins to a validators from your wallet.
+
+Example:
+$ %s tx staking multi-delegate [csv-file.csv] --from mykey
+
+csv-file.csv format (validator_addr,stake_amount)
+--------------------------------------
+cosmosvaloper12hnqezwpc9rpxqrgfwe8acnaa0w0scyexu722s,10000stake
+cosmosvaloper12hnqezwpc9rpxqrgfwe8acnaa0w0scyexu722s,1stake
+cosmosvaloper12hnqezwpc9rpxqrgfwe8acnaa0w0scyexu722s,2stake
+cosmosvaloper12hnqezwpc9rpxqrgfwe8acnaa0w0scyexu722s,4stake
+`,
+				version.AppName,
+			),
+		),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientTxContext(cmd)
+			if err != nil {
+				return err
+			}
+
+			file, err := os.Open(args[0])
+			if err != nil {
+				return err
+			}
+
+			delegateMsgs, err := csvParser(file)
+			if err != nil {
+				return err
+			}
+			delAddr := clientCtx.GetFromAddress()
+
+			msgs := make([]sdk.Msg, 0, len(delegateMsgs))
+			for _, msg := range delegateMsgs {
+				msgs = append(msgs, types.NewMsgDelegate(delAddr, msg.validatorAddr, msg.amount))
+			}
+
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msgs...)
+		},
+	}
+
+	flags.AddTxFlagsToCmd(cmd)
+
+	return cmd
+}
+
+type DelegateMsg struct {
+	validatorAddr sdk.ValAddress
+	amount        sdk.Coin
+}
+
+func csvParser(rdr io.Reader) ([]DelegateMsg, error) {
+	csvRdr := csv.NewReader(rdr)
+	lines, err := csvRdr.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+
+	delegateMsgs := make([]DelegateMsg, 0, len(lines))
+	for _, line := range lines {
+		record, err := parseLine(line)
+		if err != nil {
+			return nil, err
+		}
+
+		delegateMsgs = append(delegateMsgs, record)
+	}
+
+	return delegateMsgs, nil
+
+}
+
+func parseLine(line []string) (DelegateMsg, error) {
+	valAddr, err := sdk.ValAddressFromBech32(line[0])
+	if err != nil {
+		return DelegateMsg{}, err
+	}
+
+	amount, err := sdk.ParseCoinNormalized(line[1])
+	if err != nil {
+		return DelegateMsg{}, err
+	}
+
+	return DelegateMsg{
+		validatorAddr: valAddr,
+		amount:        amount,
+	}, nil
 }
 
 func NewRedelegateCmd() *cobra.Command {
